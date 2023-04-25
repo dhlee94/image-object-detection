@@ -16,7 +16,7 @@ def train_epoch(model=None, write_iter_num=5, trainloader=None, validloader=None
         accuracy = valid(model=model, write_iter_num=write_iter_num, valid_dataset=validloader, criterion=criterion, 
                                device=device, epoch=epoch, file=file)
         scheduler.step()
-        is_best = accuracy > best_loss
+        is_best = accuracy < best_loss
         best_loss = max(best_loss, accuracy)
         save_checkpoint({
             'epoch': epoch + 1,
@@ -49,13 +49,9 @@ def train(model=None, write_iter_num=5, train_dataset=None, optimizer=None, devi
         if idx % write_iter_num == 0:
             tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(train_dataset)} '
                        f'Loss : {loss :.4f} ')
-            # tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(train_dataset)} '
-            #            f'Loss : {loss :.4f} ', file=file)
-    # tqdm.write(f'Average Accuracy : {ave_accuracy.average() :.4f} \n\n')
-    # tqdm.write(f'Average Accuracy : {ave_accuracy.average() :.4f} \n\n', file=file)
+            tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(train_dataset)} '
+                       f'Loss : {loss :.4f} ', file=file)
 
-    return model
-    
 def valid(model=None, write_iter_num=5, valid_dataset=None, criterion=torch.nn.CrossEntropyLoss(), device=None, epoch=None, file=None):
     #ave_accuracy = AverageMeter()
     assert valid_dataset is not None, print("valid_dataset is none")
@@ -78,6 +74,5 @@ def valid(model=None, write_iter_num=5, valid_dataset=None, criterion=torch.nn.C
                         f'Loss : {loss :.4f} ')
                 tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(valid_dataset)} '
                         f'Loss : {loss :.4f} ', file=file)
-                        #f'Accuracy : {accuracy :.2f} ', file=file)
         #tqdm.write(f'Average Accuracy : {ave_accuracy.average() :.2f} ', file=file)
     return whole_loss/len(valid_dataset)

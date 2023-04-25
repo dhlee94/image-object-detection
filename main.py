@@ -125,7 +125,7 @@ def main():
         scheduler.load_state_dict(checkpoint['scheduler'])
     else:
         start_epoch = 0
-        best_loss = 0
+        best_loss = 100
     
     train_epoch(model=model, write_iter_num=5, trainloader=trainloader, validloader=validloader, optimizer=optimizer, scheduler=scheduler, device=device, 
                 criterion=criterion, start_epoch=start_epoch, end_epoch=args.epoch, log_path=args.log_path, model_path=args.model_save_path, best_loss=best_loss)
