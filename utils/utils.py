@@ -85,22 +85,21 @@ def DiceAccuracy(score, target, n_classes=4, sigmoid=False, softmax=False, thres
     tmp = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
     return tmp.mean()
 
-def IoUAccuracy(score, target, eps=1e-6):
-    _, D, _ = score.shape
+def IoUAccuracy(bbox, target, eps=1e-6):
+    B, _, _ = bbox.shape###score (c_x, c_y, w, h)
     iou_acc = 0
-    for idx in range(D):
-        box1_area = torch.abs((score[:, idx, 2]-score[:, idx, 0]) * (score[:, idx, 3] - score[:, idx, 1]))
-        box2_area = torch.abs((target[:, idx, 2]-target[:, idx, 0]) * (target[:, idx, 3] - target[:, idx, 1]))
+    for idx in range(B):
+        lower_bounds = torch.max(target[idx, :, :2].unsqueeze(1), bbox[idx, :, :2].unsqueeze(0))
+        upper_bounds = torch.max(target[idx, :, 2:].unsqueeze(1), bbox[idx, :, 2:].unsqueeze(0))
+        intersection_dims = torch.clamp(upper_bounds-lower_bounds, min=0)
+        intersection = intersection_dims[idx, :, :, 0] * intersection_dims[idx, :, :, 1]
         
-        inter_min_x = torch.max(score[:, idx, 0],target[:, idx, 0])
-        inter_min_y = torch.max(score[:, idx, 1],target[:, idx, 1])
-        inter_max_x = torch.min(score[:, idx, 2],target[:, idx, 2])
-        inter_max_y = torch.min(score[:, idx, 3],target[:, idx, 3])    
+        area_bbox = (bbox[idx, :, 2] - bbox[idx, :, 0]) * (bbox[idx, :, 3] - bbox[idx, :, 1])
+        area_target = (target[idx, :, 2] - target[idx, :, 0]) * (target[idx, :, 3] - target[idx, :, 1])
         
-        inter = torch.clamp((inter_max_x - inter_min_x), min=0) * torch.clamp((inter_max_y - inter_min_y), min=0)
-        union = box1_area + box2_area - inter
-        iou_acc += (inter / (union+eps)).mean()
-    return iou_acc / D
+        union = area_target.unsqueeze(1) + area_bbox.unsqueeze(0) - intersection
+        iou_acc += intersection / (union+eps)
+    return iou_acc/B
 
 def flatten(tensor):
     """Flattens a given tensor such that the channel axis is first.
@@ -125,7 +124,7 @@ def make_anchors(Pyramid_length, img_size=256, ratios=None, scales=None):
         scales = np.array([2**0, 2**(1.0/3.0), 2**(2.0/3.0)])
     num_anchors = len(ratios)*len(scales)
     all_anchors = []
-    
+
     for size in Pyramid_size:        
         anchors = np.zeros((num_anchors, 4))
         anchors[:, 2:] = size * np.tile(scales, (2, len(ratios))).T
@@ -160,25 +159,26 @@ def make_anchors(Pyramid_length, img_size=256, ratios=None, scales=None):
         all_anchors.extend(tmp_anchors.reshape((K * A, 4)))
     return all_anchors
 
-def IoUFindBBox(bbox, target, eps=1e-6):
+def IoUFindBBox(bbox, target, eps=1e-6):##shape (x1, y1, x2, y2)
     #reference to a-PyTorch-Tutorial-to-Object-Detection/utils.py
-    lower_bounds = torch.max(bbox[:, :2].unsqueeze(1), target[:, :2].unsqueeze(0))
-    upper_bounds = torch.max(bbox[:, 2:].unsqueeze(1), target[:, 2:].unsqueeze(0))
+    lower_bounds = torch.max(target[:, :2].unsqueeze(1), bbox[:, :2].unsqueeze(0))
+    upper_bounds = torch.max(target[:, 2:].unsqueeze(1), bbox[:, 2:].unsqueeze(0), )
     intersection_dims = torch.clamp(upper_bounds-lower_bounds, min=0)
     intersection = intersection_dims[:, :, 0] * intersection_dims[:, :, 1]
     
     area_bbox = (bbox[:, 2] - bbox[:, 0]) * (bbox[:, 3] - bbox[:, 1])
     area_target = (target[:, 2] - target[:, 0]) * (target[:, 3] - target[:, 1])
     
-    union = area_bbox.unsqueeze(1) + area_target.unsqueeze(0) - intersection
+    union = area_target.unsqueeze(1) + area_bbox.unsqueeze(0) - intersection
     return intersection / (union+eps)
     
-def Calculate_bbox_target_classes(bbox, target, classes, eps=1e-6):
-    n_objects = target.size[0]
+def Calculate_bbox_target_classes(bbox, target, classes, eps=1e-6, threshold=0.5, device=None):
+    n_objects = target.shape[0]
     overlap = IoUFindBBox(bbox=bbox, target=target, eps=eps)#(n_objects, n_bboxes) IoU
     # For each prior, find the object that has the maximum overlap
     overlap_for_each_prior, object_for_each_prior = overlap.max(dim=0)  # (n_bboxes)
-
+    overlap_for_each_prior = overlap_for_each_prior.to(device)
+    object_for_each_prior = object_for_each_prior.to(device)
     # We don't want a situation where an object is not represented in our positive (non-background) priors -
     # 1. An object might not be the best object for all priors, and is therefore not in object_for_each_prior.
     # 2. All priors with the object may be assigned as background based on the threshold (0.5).
@@ -186,7 +186,7 @@ def Calculate_bbox_target_classes(bbox, target, classes, eps=1e-6):
     # To remedy this -
     # First, find the prior that has the maximum overlap for each object.
     _, prior_for_each_object = overlap.max(dim=1)  # (n_objects)
-
+    prior_for_each_object = prior_for_each_object.to(device)
     # Then, assign each object to the corresponding maximum-overlap-prior. (This fixes 1.)
     object_for_each_prior[prior_for_each_object] = torch.LongTensor(range(n_objects)).to(device)
 
@@ -196,13 +196,20 @@ def Calculate_bbox_target_classes(bbox, target, classes, eps=1e-6):
     # Labels for each prior
     label_for_each_prior = classes[object_for_each_prior]  # (8732)
     # Set priors whose overlaps with objects are less than the threshold to be background (no object)
-    label_for_each_prior[overlap_for_each_prior < self.threshold] = 0  # (8732)
+    label_for_each_prior[overlap_for_each_prior < threshold] = 0  # (8732)
 
     # Store
     true_classes = label_for_each_prior
 
     # Encode center-size object coordinates into the form we regressed predicted boxes to
-    true_locs = cxcy_to_gcxgcy(xy_to_cxcy(boxes[object_for_each_prior]), self.priors_cxcy)  # (8732, 4)
+    tmp_target = target[object_for_each_prior]
+    tmp_target = torch.cat([(tmp_target[:, :2] + tmp_target[:, 2:])/2, (tmp_target[:, 2:] - tmp_target[:, :2])], dim=1)## (x_min, y_min, x_max, y_max) -> (c_x, x_y, w, h)
+    tmp_bbox = torch.cat([(bbox[:, :2] + bbox[:, 2:])/2, (bbox[:, 2:] - bbox[:, :2])], dim=1)## (x_min, y_min, x_max, y_max) -> (c_x, x_y, w, h)
+    true_locs = torch.cat([(tmp_target[:, :2]-tmp_bbox[:, :2])/(tmp_bbox[:, 2:]/10), torch.log(tmp_target[:, 2:]/(tmp_bbox[:, 2:]))*5], dim=1)  # (8732, 4)
+    true_locs[true_locs.isnan()] = 0
     return true_classes, true_locs
 
-    
+def gcxgcy_to_cxcy(gcxgcy, priors_xy):
+    ##reference to github.com/sgrvinod/a-PyTorch-Tutorial-to-Object-Detection/blob/master/utils.py
+    priors_cxcy = torch.cat([(priors_xy[:, :2] + priors_xy[:, 2:])/2, (priors_xy[:, 2:] - priors_xy[:, :2])], dim=1)## (x_min, y_min, x_max, y_max) -> (c_x, x_y, w, h)
+    return torch.cat([gcxgcy[:, :2] * priors_cxcy[:, 2:]/10 + priors_cxcy[:, :2], torch.exp(gcxgcy[:, 2:]/5)*priors_cxcy[:, 2:]], dim=1)

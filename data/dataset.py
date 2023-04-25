@@ -7,7 +7,7 @@ from timm.models.layers import to_2tuple
 import json
 
 class ImageDataset(Dataset):
-    def __init__(self, Image_path, num_class=1, one_hot=True, transform=None, class_names=['물달개비', '바랭이', '한련초', '흰명아주']):
+    def __init__(self, Image_path, num_class=1, one_hot=True, transform=None, class_names=['물달개비', '한련초', '흰명아주']):
         self.Image_path = Image_path
         self.transform = transform
         self.num_class = num_class

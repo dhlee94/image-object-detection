@@ -1,6 +1,7 @@
-from utils.utils import seed_everything, save_checkpoint, make_anchors
+from utils.utils import seed_everything, make_anchors
 import argparse
 from core.criterion import BoxLoss
+from core.function import train_epoch
 import pickle
 import numpy as np
 from core.optimizer import CosineAnnealingWarmUpRestarts
@@ -17,8 +18,6 @@ import torch.optim as optim
 from timm.scheduler.cosine_lr import CosineLRScheduler
 import pandas as pd
 import cv2
-from utils.utils import AverageMeter, IoUAccuracy
-from tqdm  import tqdm
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 parser = argparse.ArgumentParser()
@@ -32,7 +31,7 @@ parser.add_argument('--workers', default=0, type=int, help='dataloader workers')
 parser.add_argument('--epoch', default=100, type=int, help='Train Epoch')
 parser.add_argument('--batch_size', default=4, type=int, help='Train Batch size')
 parser.add_argument('--in_channels', default=3, type=int, help='input image channels')
-parser.add_argument('--out_channels', default=1, type=int, help='Number of class')
+parser.add_argument('--out_channels', default=3, type=int, help='Number of class')
 parser.add_argument('--filter_size', default=[32, 64, 128, 256, 512], help='ResUnet Filter size')
 parser.add_argument('--optim', default="SGD", type=str, help='type of optimizer')
 parser.add_argument('--momentum', default=0.95, type=float, help='SGD momentum')
@@ -48,6 +47,8 @@ parser.add_argument('--eta_scheduler', default=1.25e-3, type=float, help='Cosine
 parser.add_argument('--up_scheduler', default=8, type=int, help='CosineAnnealingWarmUpRestarts optimizer time Up')
 parser.add_argument('--gamma_scheduler', default=0.5, type=float, help='CosineAnnealingWarmUpRestarts optimizer gamma')
 parser.add_argument('--model_path', default=None, type=str, help='retrain model load path')
+parser.add_argument('--ratios', default=None, help='Anchors Ratios')
+parser.add_argument('--scales', default=None, help='Anchors scales')
 parser.add_argument('--model_save_path', default='./weight', type=str, help='model save path')
 parser.add_argument('--write_iter_num', default=20, type=int, help='write learning situation iteration time')
 
@@ -112,11 +113,10 @@ def main():
     else:
         scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0=args.t_scheduler, T_mult=args.trigger_scheduler, 
                                                   eta_max=args.eta_scheduler, T_up=args.up_scheduler, gamma=args.gamma_scheduler)
-        
-    prior_boxes = make_anchors(Pyramid_length=[2, 2, 3, 5, 2], img_size=args.in_channels, ratios=None, scales=None)
-    criterion = BoxLoss(prior_bboxes=prior_boxes, threshold=0.5)
-    model = model.to(device)
-    criterion = criterion.to(device)
+    
+    prior_bboxes = torch.FloatTensor(make_anchors(img_size=args.img_size, ratios=args.ratios, scales=args.scales, Pyramid_length=[2, 2, 3, 5, 2])).to(device)
+    criterion = BoxLoss(prior_bboxes=prior_bboxes, threshold=0.5)
+    
     if args.model_path:
         checkpoint = torch.load(args.model_path, map_location={'cuda:0':'cpu'})
         start_epoch = checkpoint['epoch']
@@ -126,80 +126,10 @@ def main():
     else:
         start_epoch = 0
         best_loss = 0
-    for epoch in range(start_epoch, args.epoch):
-        is_best = False
-        file = open(os.path.join(args.log_path, f'{epoch}_log.txt'), 'a')
-        train(model=model, write_iter_num=args.write_iter_num, train_dataset=trainloader, optimizer=optimizer, 
-                device=device, criterion=criterion, epoch=epoch, file=file)
-        accuracy = valid(model=model, write_iter_num=args.write_iter_num, valid_dataset=validloader, criterion=criterion, 
-                               device=device, epoch=epoch, file=file)
-        scheduler.step()
-        is_best = accuracy > best_loss
-        best_loss = max(best_loss, accuracy)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_acc1': best_loss,
-            'optimizer' : optimizer.state_dict(),
-            'scheduler' : scheduler.state_dict()
-        }, is_best=is_best, path=args.model_save_path)
-        file.close()
-
-def train(model=None, write_iter_num=5, train_dataset=None, optimizer=None, device=None, criterion=torch.nn.CrossEntropyLoss(), epoch=None, file=None):
-    scaler = torch.cuda.amp.GradScaler()
-    assert train_dataset is not None, print("train_dataset is none")
-    model.train()        
-    ave_accuracy = AverageMeter()
-    #scaler = torch.cuda.amp.GradScaler()
-    for idx, (Image, BBox, Label) in enumerate(tqdm(train_dataset)):
-        #model input data
-        Input = Image.to(device, non_blocking=True)
-        label = Label.to(device, non_blocking=True)
-        bbox = BBox.to(device, non_blocking=True)
-        predict_cls, predict_bboxes = model(Input)
-        loss = criterion(prediction_loc=predict_cls, prediction_cls=predict_bboxes, target_bboxes=bbox, target_labels=label, device=device)            
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        accuracy = IoUAccuracy(predict_bboxes, bbox)
-        ave_accuracy.update(accuracy)
-        if idx % write_iter_num == 0:
-            tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(train_dataset)} '
-                       f'Loss : {loss :.4f} '
-                       f'Accuracy : {accuracy :.2f} ')
-        if idx % (2*write_iter_num) == 0:
-            tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(train_dataset)} '
-                    f'Loss : {loss :.4f} '
-                    f'Accuracy : {accuracy :.2f} ', file=file)
-    tqdm.write(f'Average Accuracy : {ave_accuracy.average() :.4f} \n\n')
-    tqdm.write(f'Average Accuracy : {ave_accuracy.average() :.4f} \n\n', file=file)
-
-    return model
     
-def valid(model=None, write_iter_num=5, valid_dataset=None, criterion=torch.nn.CrossEntropyLoss(), device=None, epoch=None, file=None):
-    ave_accuracy = AverageMeter()
-    assert valid_dataset is not None, print("train_dataset is none")
-    model.eval()
-    with torch.no_grad():
-        for idx, (Image, BBox, Label) in enumerate(tqdm(valid_dataset)):
-            #model input data
-            Input = Image.to(device, non_blocking=True)
-            label = Label.to(device, non_blocking=True)
-            bbox = BBox.to(device, non_blocking=True)
-            predict_cls, predict_bboxes = model(Input)
-            loss = criterion(predict_cls, predict_bboxes, bbox, label, device)            
-            accuracy = IoUAccuracy(predict_cls, bbox)
-            ave_accuracy.update(accuracy)
-            if idx % write_iter_num == 0:
-                tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(valid_dataset)} '
-                        f'Loss : {loss :.4f} '
-                        f'Accuracy : {accuracy :.2f} ')
-            if idx % (2*write_iter_num) == 0:
-                tqdm.write(f'Epoch : {epoch} Iter : {idx}/{len(valid_dataset)} '
-                        f'Loss : {loss :.4f} '
-                        f'Accuracy : {accuracy :.2f} ', file=file)
-        tqdm.write(f'Average Accuracy : {ave_accuracy.average() :.2f} ', file=file)
-    return ave_accuracy.average()        
+    train_epoch(model=model, write_iter_num=5, trainloader=trainloader, validloader=validloader, optimizer=optimizer, scheduler=scheduler, device=device, 
+                criterion=criterion, start_epoch=start_epoch, end_epoch=args.epoch, log_path=args.log_path, model_path=args.model_save_path, best_loss=best_loss)
+    
 
 if __name__ == '__main__':
     main()
