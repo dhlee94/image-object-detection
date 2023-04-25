@@ -162,7 +162,7 @@ def make_anchors(Pyramid_length, img_size=256, ratios=None, scales=None):
 def IoUFindBBox(bbox, target, eps=1e-6):##shape (x1, y1, x2, y2)
     #reference to a-PyTorch-Tutorial-to-Object-Detection/utils.py
     lower_bounds = torch.max(target[:, :2].unsqueeze(1), bbox[:, :2].unsqueeze(0))
-    upper_bounds = torch.max(target[:, 2:].unsqueeze(1), bbox[:, 2:].unsqueeze(0), )
+    upper_bounds = torch.min(target[:, 2:].unsqueeze(1), bbox[:, 2:].unsqueeze(0), )
     intersection_dims = torch.clamp(upper_bounds-lower_bounds, min=0)
     intersection = intersection_dims[:, :, 0] * intersection_dims[:, :, 1]
     
@@ -213,3 +213,22 @@ def gcxgcy_to_cxcy(gcxgcy, priors_xy):
     ##reference to github.com/sgrvinod/a-PyTorch-Tutorial-to-Object-Detection/blob/master/utils.py
     priors_cxcy = torch.cat([(priors_xy[:, :2] + priors_xy[:, 2:])/2, (priors_xy[:, 2:] - priors_xy[:, :2])], dim=1)## (x_min, y_min, x_max, y_max) -> (c_x, x_y, w, h)
     return torch.cat([gcxgcy[:, :2] * priors_cxcy[:, 2:]/10 + priors_cxcy[:, :2], torch.exp(gcxgcy[:, 2:]/5)*priors_cxcy[:, 2:]], dim=1)
+
+def IoUAccuracy(predict_bboxes, bboxes, eps=1e-6):
+    pxy_bboxes = torch.zeros(predict_bboxes.shape)
+    xy_bboxes = torch.zeros(bboxes.shape)
+    for idx in range(len(predict_bboxes)):
+        pxy_bboxes[idx, ...] = torch.cat([predict_bboxes[idx, :, :2]-predict_bboxes[idx, :, 2:]/2, predict_bboxes[idx, :, :2]+predict_bboxes[idx, :, 2:]/2], dim=1)
+        xy_bboxes[idx, ...] = torch.cat([bboxes[idx, :, :2]-bboxes[idx, :, 2:]/2, bboxes[idx, :, :2]+bboxes[idx, :, 2:]/2], dim=1)
+    iou = torch.zeros(predict_bboxes.shape[:2])
+    for idx in range(len(predict_bboxes)):
+        lower_inter = torch.min(pxy_bboxes[idx, :, 2:], xy_bboxes[idx, :, 2:])
+        max_inter = torch.max(pxy_bboxes[idx, :, :2], xy_bboxes[idx, :, :2])
+        intersection = (max_inter[:, 0]-lower_inter[:, 0])*(max_inter[:, 1]-lower_inter[:, 1])
+        max_union = torch.min(pxy_bboxes[idx, :, :2], xy_bboxes[idx, :, :2])
+        lower_union = torch.max(pxy_bboxes[idx, :, 2:], xy_bboxes[idx, :, 2:])
+        union = (max_union[:, 0]-lower_union[:, 0])*(max_union[:, 1]-lower_union[:, 1])
+        tmp = union/(intersection+1e-6)
+        tmp[tmp.isnan()]=0
+        iou[idx, :] = tmp
+    return iou.mean()

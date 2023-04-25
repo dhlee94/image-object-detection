@@ -25,7 +25,7 @@ parser.add_argument('--seed', type=int,
                     default=304, help='random seed')
 parser.add_argument('--csv_path', type=str, required=True, metavar="FILE", help='Train and Valid Csv file directory path')
 parser.add_argument('--log_path', type=str, default='./log', help='Save log file path')
-parser.add_argument('--img_size', default=128, type=int, help='Resize img size')
+parser.add_argument('--img_size', default=256, type=int, help='Resize img size')
 parser.add_argument('--gpu', default="0", type=str, help='use gpu num')
 parser.add_argument('--workers', default=0, type=int, help='dataloader workers')
 parser.add_argument('--epoch', default=100, type=int, help='Train Epoch')
