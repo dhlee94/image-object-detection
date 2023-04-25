@@ -5,7 +5,7 @@ from core.function import train_epoch
 import pickle
 import numpy as np
 from core.optimizer import CosineAnnealingWarmUpRestarts
-from data.dataset import ImageDataset
+from data.dataset import ImageDataset, collate_fn
 from timm.models.layers import to_2tuple
 from torch.utils.data import DataLoader
 from models.EfficientDet import EfficientDet
@@ -60,7 +60,7 @@ def main():
 
     print("Reading Data")
     train_csv = pd.read_csv(os.path.join(args.csv_path, 'Train_data.csv'))
-    valid_csv = pd.read_csv(os.path.join(args.csv_path, 'Valid_data.csv'))
+    valid_csv = pd.read_csv(os.path.join(args.csv_path, 'Valid_data2.csv'))
     
     image_shape = to_2tuple(args.img_size)
     height, width = image_shape
@@ -93,10 +93,10 @@ def main():
     #del data_file
     train_dataset = ImageDataset(Image_path=train_csv, transform=train_transform)
     trainloader = DataLoader(train_dataset, batch_size=args.batch_size,
-                             num_workers=args.workers, pin_memory=True, shuffle=True)
+                             num_workers=args.workers, pin_memory=True, shuffle=True, collate_fn=collate_fn)
     valid_dataset = ImageDataset(Image_path=valid_csv, transform=valid_transform)
     validloader = DataLoader(valid_dataset, batch_size=args.batch_size,
-                             num_workers=args.workers, pin_memory=True, shuffle=False)
+                             num_workers=args.workers, pin_memory=True, shuffle=False, collate_fn=collate_fn)
     
     #model init
     print("Model Init")
