@@ -1,1 +1,1 @@
-# image-regression
+# image-object-detection
