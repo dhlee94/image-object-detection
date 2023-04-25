@@ -21,7 +21,17 @@ class ImageDataset(Dataset):
         with open(self.Image_path['label'][idx], 'r', encoding="UTF-8") as f:
             label = json.load(f)
         cls = [self.class_names.index(label['info']['label_path'].split('/')[1])+1]
-        bbox = [label['annotations']['bbox']] # x, y, w, h
+        w, h = np.array(data).shape[:2]
+        bbox = np.array(label['annotations']['bbox'])
+        if len(bbox.shape)==1:
+            bbox = [label['annotations']['bbox']] # x, y, w, h
+            bbox[0][2] = w-1 if bbox[0][2]>=w else bbox[0][2]
+            bbox[0][3] = h-1 if bbox[0][3]>=h else bbox[0][3]
+        else:
+            bbox = label['annotations']['bbox'].tolist() # x, y, w, h
+            for idx in range(len(bbox)):
+                bbox[idx][2] = w-1 if bbox[idx][2]>=w else bbox[idx][2]
+                bbox[idx][3] = h-1 if bbox[idx][3]>=h else bbox[idx][3]
         if self.transform != None:
             transformed = self.transform(image=np.array(data), bboxes=bbox, class_labels=cls)
             return transformed['image'], torch.FloatTensor(transformed['bboxes']), torch.LongTensor(transformed['class_labels'])
